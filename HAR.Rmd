@@ -1,0 +1,491 @@
+---
+title: "Machine Learning - Project"
+author: "Marcel M."
+date: "4/26/2020"
+output: html_document
+---
+<style>
+body {
+text-align: justify}
+</style> 
+
+# HUMAN ACTIVITY RECOGNITION
+
+## Introduction
+
+Human activity recognition (HAR) involves predicting the movement of a person based on sensor data and traditionally involves deep domain expertise and methods from signal processing to correctly engineer features from the raw data in order to fit a machine learning model.
+This report aims at builting a model capable to predict how well people do a particular activity, which in this case is perfom barbell lifts. For the purpose of this project, a data set from accelerometers placed in different parts of 6 participants is used to predict the manner individuals performed the exercise.
+
+
+
+## 1 Loading data
+```{r, message=FALSE,warning=FALSE}
+
+setwd("C:/Users/Marcel/Documents/DataScience/Course8 - Machine Learning")
+if(!dir.exists("Project_HAR")){
+  dir.create("Project_HAR")
+  setwd("Project_HAR")
+  url_train = "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+  url_test = "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+  download.file(url_train, "training.csv")
+  download.file(url_test, "testing.csv")}
+  
+  setwd("Project_HAR")
+  training = read.csv("training.csv")
+  testing = read.csv("testing.csv")
+
+```
+
+
+
+## 2 Cross Validation: K-Folds
+
+The cross-validation resampling procedure to evaluate the machine learning models splits the data sample in 10 groups (folds), as follows:
+```{r, warning=FALSE, message=FALSE}
+library(caret)
+
+CrossVal = trainControl(method = "cv", number = 10, classProbs = TRUE)
+``` 
+
+
+
+## 3 Feature Selection
+
+### 3.1 Percentage of missing values
+
+Drop variables that have a very high percentage of missing values.
+```{r, warning=FALSE,message=FALSE}
+training <- training[, colMeans(is.na(training)) < .9]
+```
+
+### 3.2 Removing identification predictors.
+```{r, message=FALSE, warning=FALSE}
+training = training[, -(1:5)]
+```
+
+### 3.3  Removing Near Zero Variance predictors.
+
+Drop variables that have very low variation.
+```{r, message=FALSE,warning=FALSE}
+NZV = nearZeroVar(training)
+training = training[,-NZV]
+```
+
+### 3.4 Multicollinearity
+
+The analysis of correlation indicates there are 22 predicators with correlation above 70% with other predictors. Multicollinearity might be harmful to prediction models and can be eliminated by PCA (Code in Appendix A).
+
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+library(corrplot)
+corrPlot <- corrplot(cor(training[,-54]), order = "FPC", method = "color", type = "lower", tl.cex = .5, tl.col = "black", title = "Correlation Among Predictors")
+
+listCorr <- findCorrelation(corrPlot, cutoff = .7)
+namesCorr <- names(training)[listCorr]
+print(namesCorr)
+```
+
+
+### 3.5 Coefficient of Variation
+
+Almost half of the predictors (25 out of 53) present a high coefficient of variation (>1). This high variation can be corrected via standardizing, which also primes the data for the PCA pre-processing (Code in Appendix B).
+```{r, echo=FALSE, message=FALSE,warning=FALSE}
+library(ggplot2)
+
+StdDev <- apply(training[,-54], 2, sd)
+MeanSub <- apply(training[,-54],2, mean)
+CoeffVar <- StdDev/MeanSub
+
+StdDF <- data.frame(names(training[,-54]), CoeffVar)
+
+StdDF$Level <- ifelse(abs(StdDF$CoeffVar) <= 1, StdDF$Level <- "low", StdDF$Level <- "high")
+names(StdDF) <- c("Predictor", "Coefficient.Variation", "Level")
+
+CVplot <- ggplot(StdDF, aes(Predictor, Coefficient.Variation, color = Level)) + geom_point(pch=16, cex=3, alpha=.8)+ scale_color_manual(values = c("red", "orange"))+ ylim(0,60) + theme(axis.text.x = element_text(angle = 90)) + theme(text = element_text(size=9)) + labs(x="Predictors", y="Coefficient of Variation") + ggtitle("Variability of Predictors")
+
+listCV <- subset(StdDF, StdDF$Coefficient.Variation > 1)
+print(listCV$Predictor)
+```
+
+
+### 3.6 Pre-Process: Standardizing
+Before applying the PCA method, the dataset must be standardized, as the standard deviation of many features is relatively high.
+```{r, message=FALSE,warning=FALSE}
+
+Std <- preProcess(training[,-54], method=c("center", "scale"))
+
+StdTraining <- predict(Std, training[,-54])
+StdTraining <- data.frame(StdTraining, training$classe)
+```
+
+### 3.7 Principal Components Analysis (PCA)
+
+Remove variables that are highly correlated to each other (> 70%). Find a new set of multivariate variables to explain as much variance as possible. It is perfomed along with the model estimation via "preProc='pca'". 
+
+
+
+## 4 Subsetting "training" set.
+
+Now the dataset is reduced and adjusted, it is convenient for purposes of model validation to create a second data set.
+```{r, warning=FALSE, message=FALSE}
+
+intrain <- createDataPartition(training$classe, p=3/4[[1]], list=FALSE)
+subTraining <- StdTraining[intrain,]
+validating <- StdTraining[-intrain,]
+```
+
+
+
+## 5 Building and Training Models
+
+### 5.1 Prediction with Trees
+
+#### A) No PCA
+```{r, message=FALSE, warning=FALSE}
+
+# tree <- train(training.classe~., subTraining, method="rpart", trControl=CrossVal)
+
+# Results:
+#  Accuracy      Kappa 
+# 0.6004854 0.49225391 
+``` 
+
+
+
+#### B) With PCA
+```{r}
+
+# treePCA <- train(training.classe ~., subTraining, method="rpart", trControl=CrossVal, preProc="pca")
+
+#Results:
+#  Accuracy     Kappa   
+# 0.3678493 0.1666694 
+```
+
+
+
+### 5.2 Random Forest
+
+#### A) No PCA
+```{r}
+
+# rf <- train(training.classe~., subTraining, method="rf", trControl=CrossVal)
+
+# Results:
+
+# Accuracy     Kappa
+#0.9949719 0.9936395
+```
+
+
+#### B) With PCA
+```{r}
+
+# rfPCA <- train(training.classe~., subTraining, method="rf", trControl=CrossVal, preProc="pca")
+
+# Results:
+
+#Accuracy       Kappa
+#0.9790726  0.9735292
+```
+
+
+### 5.3 Gradient Boosting Algorithm
+
+#### A) No PCA
+```{r}
+
+# gbm <- train(training.classe~., subTraining, method="gbm", trControl=CrossVal, verbose=FALSE)
+
+# Results:
+
+# Accuracy     Kappa
+# 0.9882466 0.9851325
+```
+
+
+
+#### B) With PCA
+```{r}
+
+# gbmPCA <- train(training.classe~., subTraining, method="gbm", trControl=CrossVal, preProc="pca", verbose=FALSE)
+
+# Results:
+
+# Accuracy     Kappa
+# 0.8162108  0.7675000
+```
+
+
+
+### 5.4 Linear Discriminant Analysis
+
+#### A) No PCA
+```{r}
+
+# lda <- train(training.classe~., subTraining, method="lda", trControl=CrossVal)
+
+# Results:
+
+# Accuracy     Kappa
+# 0.711241  0.6346093
+```
+
+
+
+#### B) With PCA
+```{r}
+
+# ldaPCA <- train(training.classe~., subTraining, method="lda", tdControl=CrossVal, preProc="pca")
+
+# Results:
+
+# Accuracy     Kappa
+# 0.5424272  0.4206333
+``` 
+
+
+
+## 6 Model Validation
+
+1) Tree
+```{r}
+# Vtree <- predict(tree, newdata = validating)
+# CMVtree <- confusionMatrix(Vtree, validating$training.classe)
+
+#Overall Statistics
+                                          
+#               Accuracy : 0.575           
+#                95% CI : (0.5611, 0.5889)
+#    No Information Rate : 0.2845          
+#    P-Value [Acc > NIR] : < 2.2e-16   
+```
+ 
+            
+                 
+2) TreePCA
+```{r}
+# VtreePCA <- predict(treePCA, newdata = validating)
+# CMVtreePCA <- confusionMatrix(VtreePCA, validating$training.classe)
+
+# Overall Statistics
+                                          
+#               Accuracy : 0.3522          
+#                 95% CI : (0.3388, 0.3657)
+#    No Information Rate : 0.2845          
+#    P-Value [Acc > NIR] : < 2.2e-16 
+```
+  
+                
+3) Rf
+```{r}
+# Vrf <- predict(rf, newdata=validating)
+# CMVrf <- confusionMatrix(Vrf, validating$training.classe)
+
+# Overall Statistics
+                                          
+#               Accuracy : 0.9986          
+#                 95% CI : (0.9971, 0.9994)
+#    No Information Rate : 0.2845          
+#    P-Value [Acc > NIR] : < 2.2e-16 
+```
+
+
+4) RfPCA
+```{r}
+# VrfPCA <- predict(rfPCA, newdata= validating)
+# CMVrfPCA <- confusionMatrix(VrfPCA, validating$training.classe)
+
+# Overall Statistics
+                                          
+#               Accuracy : 0.9821          
+#                 95% CI : (0.9779, 0.9856)
+#    No Information Rate : 0.2845          
+#    P-Value [Acc > NIR] : < 2.2e-16 
+```
+ 
+                                          
+5) Gbm
+```{r}
+# Vgbm <- predict(gbm, newdata= validating)
+# CMVgbm <- confusionMatrix(Vgbm, validating$training.classe)
+
+# Overall Statistics
+                                          
+#               Accuracy : 0.9878          
+#                 95% CI : (0.9843, 0.9907)
+#    No Information Rate : 0.2845          
+#    P-Value [Acc > NIR] : < 2.2e-16 
+```
+      
+                
+
+6) GbmPCA
+```{r}
+# VgbmPCA <- predict(gbmPCA, newdata= validating)
+# CMVgbmPCA <- confusionMatrix(VgbmPCA, validating$training.classe)
+
+# Overall Statistics
+                                         
+#               Accuracy : 0.822          
+#                 95% CI : (0.811, 0.8326)
+#    No Information Rate : 0.2845         
+#    P-Value [Acc > NIR] : < 2.2e-16      
+                                     
+```
+    
+                                         
+
+7) Lda
+```{r}
+# Vlda <- predict(lda, newdata=validating)
+# CMVlda <- confusionMatrix(Vlda, validating$training.classe)
+
+# Overall Statistics
+                                          
+#               Accuracy : 0.7131          
+#                 95% CI : (0.7002, 0.7257)
+#    No Information Rate : 0.2845          
+#    P-Value [Acc > NIR] : < 2.2e-16
+```
+  
+  
+
+8) LdaPCA
+```{r}
+# VldaPCA <- predict(ldaPCA, newdata=validating)
+# CMVldaPCA <-confusionMatrix(VldaPCA, validating$training.classe)
+
+# Overall Statistics
+                                          
+#               Accuracy : 0.5449          
+#                 95% CI : (0.5308, 0.5589)
+#    No Information Rate : 0.2845          
+#    P-Value [Acc > NIR] : < 2.2e-16 
+```
+      
+
+
+
+## 7 Estimation of Out-of-Sample Error
+```{r}
+# leng <- nrow(validating)
+# errorTree <- 1 - (sum(Vtree == validating$training.classe)/leng)
+# errorTreePCA <- 1 - (sum(VtreePCA == validating$training.classe)/leng)
+# errorRf <- 1 - (sum(Vrf == validating$training.classe)/leng)
+# errorRfPCA <- 1 - (sum(VrfPCA == validating$training.classe)/leng)
+# errorGbm <- 1 - (sum(Vgbm == validating$training.classe)/leng)
+# errorGbmPCA <- 1 - (sum(VgbmPCA == validating$training.classe)/leng)
+# errorLda <- 1 - (sum(Vlda == validating$training.classe)/leng)
+# errorLdaPCA <- 1 - (sum(VldaPCA == validating$training.classe)/leng)
+```
+
+
+
+## 8 Model Selection
+
+Accuracy was used to select the optimal model using the largest value. According to the table below, the best model among the 8 ones validated in this project is the "rf" model, with an accuracy of approximately 0.9986. Moreover, the same model has the smallest expected out-of-sample error (0.14%). It is also noticeable how the deployment of PCA has decreased model accuracy in all models in this case.
+
+```{r, echo=FALSE, warning=FALSE,message=FALSE}
+dfAccuracy <- table("Model", "Accuracy")
+dfAccuracy$Model <- c("tree", "treePCA", "rf", "rfPCA", "gbm", "gbmPCA", "lda", "ldaPCA")
+dfAccuracy$Accuracy <- as.numeric(c(0.5750408, 0.3521615, 0.9985726, 0.9820555, 0.9877651, 0.8219821,  0.7130914, 0.5448613))
+dfAccuracy <- as.data.frame(dfAccuracy[-(1)])
+dfAccuracy$Out.of.Sample.Error <- c(0.425, 0.648, 0.0014, 0.018, 0.012, 0.178, 0.286,     0.455)
+library(formattable)
+
+formattable(dfAccuracy, align = c("l","c","r"), list(
+    `Indicator Name` = formatter("span", style = ~ style(color = "grey",font.weight = "bold")), 
+     area(col = 1:3) ~ color_tile("#FFFF99", "#FF8000")))
+```
+
+
+
+## 9 The Random Forest (RF) Model
+
+```{r}
+
+# rf = train(training.classe~., subTraining, method="rf", trControl=CrossVal)
+
+# Confusion Matrix and Statistics
+
+#          Reference
+#Prediction    A    B    C    D    E
+#         A 1394    4    0    0    0
+#         B    1  943    0    0    0
+#         C    0    2  855    0    0
+#         D    0    0    0  804    0
+#         E    0    0    0    0  901
+
+#Overall Statistics
+                                          
+#               Accuracy : 0.9986          
+#                 95% CI : (0.9971, 0.9994)
+#    No Information Rate : 0.2845          
+#    P-Value [Acc > NIR] : < 2.2e-16       
+                                          
+#                  Kappa : 0.9982          
+                                          
+# Mcnemar's Test P-Value : NA              
+
+#Statistics by Class:
+
+#                    Class: A Class: B Class: C Class: D Class: E
+#Sensitivity            0.9993   0.9937   1.0000   1.0000   1.0000
+#Specificity            0.9989   0.9997   0.9995   1.0000   1.0000
+#Pos Pred Value         0.9971   0.9989   0.9977   1.0000   1.0000
+#Neg Pred Value         0.9997   0.9985   1.0000   1.0000   1.0000
+#Prevalence             0.2845   0.1935   0.1743   0.1639   0.1837
+#Detection Rate         0.2843   0.1923   0.1743   0.1639   0.1837
+#Detection Prevalence   0.2851   0.1925   0.1748   0.1639   0.1837
+#Balanced Accuracy      0.9991   0.9967   0.9998   1.0000   1.0000
+```
+
+
+## 10 Prediction
+```{r}
+
+# prediction <- predict(rf, newdata=testing)
+# prediction
+
+##  [1] B A B A A E D B A A B C B A E E A B B B
+## Levels: A B C D E
+``` 
+
+
+
+## APPENDIX
+
+### A) Multicolinearity analysis
+
+```{r, message=FALSE, warning=FALSE}
+
+library(corrplot)
+corr <- corrplot(cor(training[,-54]), order = "FPC", method = "color", type = "lower", tl.cex = .5, tl.col = "black", title = "Correlation Among Predictors")
+
+listCorr <- findCorrelation(corr, cutoff = .7)
+namesCorr <- names(training)[listCorr]
+```
+
+
+## B) Coefficient of Variation
+```{r, message=FALSE,warning=FALSE}
+library(ggplot2)
+
+StdDev <- apply(training[,-54], 2, sd)
+MeanSub <- apply(training[,-54],2, mean)
+CoeffVar <- StdDev/MeanSub
+
+StdDF <- data.frame(names(training[,-54]), CoeffVar)
+
+StdDF$Level <- ifelse(abs(StdDF$CoeffVar) <= 1, StdDF$Level <- "low", StdDF$Level <- "high")
+names(StdDF) <- c("Predictor", "Coefficient.Variation", "Level")
+
+CVplot <- ggplot(StdDF, aes(Predictor, Coefficient.Variation, color = Level)) + geom_point(pch=16, cex=3, alpha=.8)+ scale_color_manual(values = c("red", "orange"))+ ylim(0,60) + theme(axis.text.x = element_text(angle = 90)) + theme(text = element_text(size=9)) + labs(x="Predictors", y="Coefficient of Variation") + ggtitle("Variability of Predictors")
+
+listCV <- subset(StdDF, StdDF$Coefficient.Variation > 1)
+rowCV <- nrow(listCV)
+print(CVplot)
+```
